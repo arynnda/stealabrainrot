@@ -1,172 +1,115 @@
-repeat task.wait() until game:IsLoaded() and game:GetService("Players").LocalPlayer
-print("KAMI•APA")
+local function main()
+repeat task.wait() until game:IsLoaded()
+repeat task.wait() until game.Players.LocalPlayer
 
--- ======================================================
--- SERVICES
--- ======================================================
 local Players = game:GetService("Players")
 local ProximityPromptService = game:GetService("ProximityPromptService")
-local VirtualUser = game:GetService("VirtualUser")
-local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Lighting = game:GetService("Lighting")
-
 local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
 
--- ======================================================
--- CONFIG
--- ======================================================
-getgenv().TARGET_UNITS = getgenv().TARGET_UNITS or {}
-getgenv().GRAB_RADIUS = getgenv().GRAB_RADIUS or 8
-getgenv().FPS_CAP = getgenv().FPS_CAP or 20
-getgenv().BLACK_SCREEN = getgenv().BLACK_SCREEN ~= false
-getgenv().WEBHOOK_URL = getgenv().WEBHOOK_URL or ""
 
-local SPIN_INTERVAL = 5
+local TARGET_LIST = getgenv().TARGET_LIST or {
+	"Ketchuru and Musturu","Nuclearo Dinossauro","Chicleteira Bicicleteira",
+	"La Grande Combinasion","Nooo My Hotspot","Meowl","Dragon Cannelloni",
+	"Money Money Puggy","Ketupat Kepat","Tictac Sahur","Strawberry Elephant",
+	"Garama and Madundung","Tang Tang Keletang","Cooki and Milki","Lavadorito Spinito",
+	"Secret Lucky Block","Burguro And Fryuro","Smurf Cat","Money Money Reindeer",
+	"List List List Sahur","Ginger Gerat","Jolly Jolly Sahur","Capitano Moby","Gold Elf"
+}
+getgenv().TARGET_LIST = TARGET_LIST
 
--- ======================================================
--- FPS CAP (SAFE)
--- ======================================================
-if typeof(setfpscap) == "function" then
-	task.spawn(function()
-		while true do
-			setfpscap(getgenv().FPS_CAP)
-			task.wait(1)
-		end
-	end)
+if getgenv().KAMI_APA_INIT then return end
+getgenv().KAMI_APA_INIT = true
+print("KAMI•APA")
+
+if getgenv().AUTO_GRAB_ACTIVE then return end
+getgenv().AUTO_GRAB_ACTIVE = true
+
+getgenv().FORGOTTEN_UNITS = {}
+getgenv().UNIT_SPAWN_COUNT = {}
+getgenv().SEEN_UNIT_INSTANCES = {}
+getgenv().MAX_SPAWN_BEFORE_FORGET = 10
+getgenv().GRAB_RADIUS = 8
+getgenv().HOLD_TIME = 2.5
+getgenv().TARGET_TIMEOUT = 8
+getgenv().TARGET_QUEUE = {}
+getgenv().currentTarget = nil
+getgenv().promptBusy = false
+getgenv().targetStartTime = 0
+
+local function getUnitID(model)
+	return model:GetAttribute("Index") or model.Name
 end
 
--- ======================================================
--- EXTREME DARK LIGHTING
--- ======================================================
-task.spawn(function()
-	pcall(function()
-		Lighting.GlobalShadows = false
-		Lighting.Brightness = 0
-		Lighting.EnvironmentDiffuseScale = 0
-		Lighting.EnvironmentSpecularScale = 0
-		Lighting.OutdoorAmbient = Color3.new(0,0,0)
-		Lighting.Ambient = Color3.new(0,0,0)
-		Lighting.ClockTime = 0
-		Lighting.ExposureCompensation = -4
-		Lighting.FogColor = Color3.new(0,0,0)
-		Lighting.FogStart = 0
-		Lighting.FogEnd = 60
-	end)
-
-	for _,v in ipairs(Lighting:GetChildren()) do
-		if v:IsA("PostEffect") then
-			v:Destroy()
-		end
+local function canProcessUnit(model)
+	if getgenv().SEEN_UNIT_INSTANCES[model] then
+		return not getgenv().FORGOTTEN_UNITS[getUnitID(model)]
 	end
-end)
-
--- ======================================================
--- BASIC
--- ======================================================
-local function char()
-	return player.Character
+	getgenv().SEEN_UNIT_INSTANCES[model] = true
+	local id = getUnitID(model)
+	getgenv().UNIT_SPAWN_COUNT[id] = (getgenv().UNIT_SPAWN_COUNT[id] or 0) + 1
+	if getgenv().UNIT_SPAWN_COUNT[id] >= getgenv().MAX_SPAWN_BEFORE_FORGET then
+		getgenv().FORGOTTEN_UNITS[id] = true
+		return false
+	end
+	return true
 end
 
-local function hrp()
-	local c = char()
-	return c and c:FindFirstChild("HumanoidRootPart")
-end
-
-local function humanoid()
-	local c = char()
-	return c and c:FindFirstChildOfClass("Humanoid")
-end
-
-local firePrompt = typeof(fireproximityprompt) == "function"
-	and fireproximityprompt
-	or function() end
-
-local function webhook(msg)
-	if getgenv().WEBHOOK_URL == "" then return end
-	pcall(function()
-		HttpService:PostAsync(
-			getgenv().WEBHOOK_URL,
-			HttpService:JSONEncode({content = msg}),
-			Enum.HttpContentType.ApplicationJson
-		)
-	end)
-end
-
--- ======================================================
--- TARGET CHECK
--- ======================================================
 local function isTarget(model)
+	if getgenv().FORGOTTEN_UNITS[getUnitID(model)] then return false end
 	local idx = model:GetAttribute("Index")
 	if not idx then return false end
-	for _,v in ipairs(getgenv().TARGET_UNITS) do
-		if v == idx then return true end
+	for _, n in ipairs(getgenv().TARGET_LIST) do
+		if idx == n then
+			return canProcessUnit(model)
+		end
 	end
 	return false
 end
 
--- ======================================================
--- STATE
--- ======================================================
-local currentTarget
-local pendingName
-local lastMoney
-
--- ======================================================
--- MONEY DETECT
--- ======================================================
-task.spawn(function()
-	local stats = player:WaitForChild("leaderstats")
-	for _,v in ipairs(stats:GetChildren()) do
-		if v:IsA("IntValue") or v:IsA("NumberValue") then
-			lastMoney = v.Value
-			v.Changed:Connect(function(nv)
-				if nv < lastMoney and pendingName then
-					webhook("🛒 Bought: "..pendingName)
-					currentTarget = nil
-					pendingName = nil
-				end
-				lastMoney = nv
-			end)
-			break
-		end
-	end
-end)
-
--- ======================================================
--- TARGET SPAWN
--- ======================================================
 workspace.DescendantAdded:Connect(function(obj)
-	if currentTarget then return end
 	if obj:IsA("Model") and isTarget(obj) then
-		currentTarget = obj
-		pendingName = obj:GetAttribute("Index") or obj.Name
+		table.insert(getgenv().TARGET_QUEUE, obj)
 	end
 end)
 
--- ======================================================
--- AUTO PROMPT
--- ======================================================
 ProximityPromptService.PromptShown:Connect(function(prompt)
-	if currentTarget and prompt:IsDescendantOf(currentTarget) then
-		firePrompt(prompt)
-	end
+	if not getgenv().currentTarget then return end
+	if getgenv().promptBusy then return end
+	if not prompt:IsDescendantOf(getgenv().currentTarget) then return end
+	getgenv().promptBusy = true
+	task.delay(0.25, function()
+		pcall(function()
+			fireproximityprompt(prompt, getgenv().HOLD_TIME)
+		end)
+		task.delay(getgenv().HOLD_TIME + 0.3, function()
+			getgenv().promptBusy = false
+		end)
+	end)
 end)
 
--- ======================================================
--- MOVE LOOP
--- ======================================================
 task.spawn(function()
 	while true do
-		if currentTarget then
-			local part = currentTarget:FindFirstChildWhichIsA("BasePart")
-			local h = humanoid()
-			local r = hrp()
-			if part and h and r then
-				if (r.Position - part.Position).Magnitude > getgenv().GRAB_RADIUS then
-					h:MoveTo(part.Position)
+		if not getgenv().currentTarget and #getgenv().TARGET_QUEUE > 0 then
+			getgenv().currentTarget = table.remove(getgenv().TARGET_QUEUE, 1)
+			getgenv().targetStartTime = tick()
+		end
+		local tgt = getgenv().currentTarget
+		if tgt then
+			if not tgt.Parent or tick() - getgenv().targetStartTime > getgenv().TARGET_TIMEOUT then
+				getgenv().SEEN_UNIT_INSTANCES[tgt] = nil
+				getgenv().currentTarget = nil
+				getgenv().promptBusy = false
+			else
+				local part = tgt:FindFirstChildWhichIsA("BasePart")
+				local char = player.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				if part and hum and hrp then
+					if (hrp.Position - part.Position).Magnitude > getgenv().GRAB_RADIUS then
+						hum:MoveTo(part.Position)
+					end
 				end
 			end
 		end
@@ -174,93 +117,76 @@ task.spawn(function()
 	end
 end)
 
--- ======================================================
--- AUTO SPIN
--- ======================================================
+local TARGETS = {
+	Vector3.new(-410.11822509765625, -6.4036846, 167.416473),
+	Vector3.new(-408.23968505859374, -6.4036846, 95.5442123),
+	Vector3.new(-407.6501159667969, -6.4036846, 82.0257492),
+	Vector3.new(-418.2996520996094, -6.4036850, 81.5518341)
+}
+
 task.spawn(function()
-	local Packages = ReplicatedStorage:WaitForChild("Packages")
-	local ok, Net = pcall(require, Packages:WaitForChild("Net"))
-	if not ok then return end
-
-	local SpinEvent = Net:RemoteEvent("ChristmasEventService/Spin")
-	local last = 0
-
 	while true do
-		if tick() - last >= SPIN_INTERVAL then
-			pcall(function()
-				SpinEvent:FireServer()
-			end)
-			last = tick()
+		local char = player.Character or player.CharacterAdded:Wait()
+		local hum = char:WaitForChild("Humanoid")
+		local root = char:WaitForChild("HumanoidRootPart")
+		for _, target in ipairs(TARGETS) do
+			if hum.Health <= 0 then break end
+			local goal = Vector3.new(target.X, root.Position.Y, target.Z)
+			hum:MoveTo(goal)
+			local start = tick()
+			while tick() - start < 5 do
+				if (root.Position - goal).Magnitude <= 3 then break end
+				task.wait(0.1)
+			end
+			task.wait(0.4)
 		end
-		task.wait(0.5)
+		task.wait(10)
 	end
 end)
 
--- ======================================================
--- ANTI AFK
--- ======================================================
-player.Idled:Connect(function()
-	VirtualUser:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
-	task.wait(1)
-	VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
-end)
+local Packages = ReplicatedStorage:WaitForChild("Packages")
+local Net = require(Packages:WaitForChild("Net"))
+local SpinEvent = Net:RemoteEvent("CursedEventService/Spin")
 
--- ======================================================
--- BLACK SCREEN + FPS + F5
--- ======================================================
-local gui, fpsConn
-local enabled = getgenv().BLACK_SCREEN
-
-local function enableBlack()
-	if gui then return end
-	gui = Instance.new("ScreenGui", game:GetService("CoreGui"))
-	gui.IgnoreGuiInset = true
-	gui.ResetOnSpawn = false
-
-	local bg = Instance.new("Frame", gui)
-	bg.Size = UDim2.new(1,0,1,0)
-	bg.BackgroundColor3 = Color3.new(0,0,0)
-	bg.BorderSizePixel = 0
-
-	local title = Instance.new("TextLabel", gui)
-	title.Size = UDim2.new(0,300,0,40)
-	title.Position = UDim2.new(0.5,-150,0,10)
-	title.BackgroundTransparency = 1
-	title.Text = "KAMI•APA"
-	title.Font = Enum.Font.GothamBold
-	title.TextSize = 26
-	title.TextColor3 = Color3.new(1,1,1)
-
-	local fps = Instance.new("TextLabel", gui)
-	fps.Size = UDim2.new(0,200,0,30)
-	fps.Position = UDim2.new(0.5,-100,0,52)
-	fps.BackgroundTransparency = 1
-	fps.TextColor3 = Color3.new(1,1,1)
-	fps.Font = Enum.Font.Gotham
-	fps.TextSize = 18
-
-	local frames,last=0,tick()
-	fpsConn = RunService.RenderStepped:Connect(function()
-		frames+=1
-		if tick()-last>=1 then
-			fps.Text="FPS : "..frames
-			frames=0
-			last=tick()
-		end
-	end)
-end
-
-local function disableBlack()
-	if fpsConn then fpsConn:Disconnect() fpsConn=nil end
-	if gui then gui:Destroy() gui=nil end
-end
-
-if enabled then enableBlack() end
-
-UserInputService.InputBegan:Connect(function(i,gp)
-	if gp then return end
-	if i.KeyCode==Enum.KeyCode.F5 then
-		enabled = not enabled
-		if enabled then enableBlack() else disableBlack() end
+task.spawn(function()
+	while true do
+		SpinEvent:FireServer()
+		task.wait(30)
 	end
 end)
+
+local MOVE_INTERVAL = 300
+local MOVE_STEPS = 10
+
+local function tinyMove()
+	local char = player.Character
+	if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+	local hrp = char.HumanoidRootPart
+	local originalCFrame = hrp.CFrame
+	for i = 1, MOVE_STEPS do
+		local offset = Vector3.new(math.random(-1,1)*0.05,0,math.random(-1,1)*0.05)
+		hrp.CFrame = originalCFrame + offset
+		task.wait(0.1)
+	end
+	hrp.CFrame = originalCFrame
+end
+
+local function tinyCameraMove()
+	local cam = workspace.CurrentCamera
+	local originalCFrame = cam.CFrame
+	local angle = math.rad(math.random(-5,5))
+	cam.CFrame = cam.CFrame * CFrame.Angles(0, angle, 0)
+	task.wait(0.5)
+	cam.CFrame = originalCFrame
+end
+
+task.spawn(function()
+	while true do
+		tinyMove()
+		tinyCameraMove()
+		task.wait(MOVE_INTERVAL)
+	end
+end)
+end
+
+loadstring("return "..string.dump(main))()()
